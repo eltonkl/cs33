@@ -1,0 +1,15 @@
+What works?
+Setting watch points to track registers: watch $eax
+Adjusting output of watch points to be in hex: set output-radix 16
+Automatically printing $rip/eip on each instruction: display/i $pc
+Shortcuts!!!: print -> p, stepi -> si, breakpoint -> b
+Printing in other formats: p/d for signed int, p/x for hex, etc
+Printing an address and its dereference: x $esp
+If assembly was mov $eax, ($ebp, $edx, 4), then can check the second operand with: x ($ebp + $edx * 4)
+Breakpoints: breakpoint Ftimes
+Printing out registers: info registers
+Logging!: set logging file log.txt\set logging on
+
+What doesn't work?
+Accidentally watch pointing nonexistent registers, which works but does nothing: watch $eeax
+Forgetting to change output format of p or x, as the default is changed to the most recent output format

@@ -1,0 +1,8 @@
+12.18
+A. Unsafe
+B. Safe
+C. Unsafe
+12.24
+The functions in the RIO I/O package are reentrant, as long as the calling
+threads pass only pointers to nonshared data to them. They do not use global
+variables to share state. 

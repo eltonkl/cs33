@@ -1,0 +1,42 @@
+1.	0x8120aab<arith_driver+395>data.c:2640  imul %ecx,%esi  esi=0xc000000i
+	0x8120ab1<arith_driver+401>data.c:2642  and $0x3fffffff,%esi    esi=0x00000001
+The multiply overflows on x86, which leaves 0xc0000001, the last 8 bytes of the
+result, in the register.
+The first 2 bits are masked, because they are used as a marker for the type
+system of Emacs Lisp. So x86 Emacs Lisp handles at max 30-bit
+integers; only the last bit is set to 1. This bit makes the value of the
+multiply a 1.
+2. The third trace has the least instructions, so it would be the most 
+efficient if instruction count was the performance metric. 
+3. The least efficient trace, using the same metric, would be the second one, 
+the x86-64 one, as it has the most instructions.
+4. The number 536870911 is the largest integer Emacs Lisp handles on x86, at
+30-bits. The other 2 bits are used for Emacs Lisp's type system. 
+536870911 is 2^29 - 1, the INT_MAX for a signed 30-bit integer.
+5. If the Emacs executables were compiled with -ftrapv, they would not have a
+problem with trapping on overflow, as -ftrapv -O2 is broken. If -ftrapv -O0 
+were used instead, then it would trap on overflow.
+6. -fwrapv would have a similar effect as -ftrapv, as the generated code is 
+similar. In intprops.h, the documentation states that the INT_MULTIPLY_OVERFLOW
+macro that arith_driver uses does not rely on undefined or implementation 
+defined behavior, so turning on -fwrapv would not affect the code. In addition,
+the just -O2 compiled result uses imull and is allowed to overflow anyways,
+so using -fwrapv would not affect the result.
+7. If wrap on overflow is defined, then there is no need to use the
+INT_MULTIPLY_OVERFLOW macro to check for overflow and treat that case
+specially. Instead, the result of the multiplication just needs to have the
+first 2 bits masked out incase of overflow. This would look like
+case Amult:
+    accum *= next;
+    accum &= INTMASK;
+    break;
+8. The efficiency differences are probably not going to be very impactful in
+the context of Emacs execution, as you're probably editing more text than you
+are running Elisp commands. In addition, a difference of 6 instructions is
+relatively minor, given the speed of modern processors. The x86-64 version
+does, however, use less memory reads and writes and more register accesses.
+This might make it faster, if the processor cannot use its cache to speed up
+the memory accesses of the x86 version.
+The suggested changes to the function mentioned in #7 would be a lot more
+significant in terms of efficiency, as the overflow check generates at least
+20 instructions. A 20% reduction in instruction count is impressive.

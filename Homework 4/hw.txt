@@ -1,0 +1,47 @@
+2.88
+A. (float) x == (float) dx
+Always yields one. double can hold the range of an int, so casting from int to 
+float and from double to float will either not round or will round in the same way.
+B. dx - dy = (double) (x-y)
+Does not always yield one.
+x = INT_MIN, y = 1
+C. (dx + dy) + dz == dx + (dy + dz)
+Always yields one. 3 * INT_MIN and 3 * INT_MAX fall within the range of a 
+double, so the range of possible sums can be represented exactly.
+D. (dx * dy) * dz = dx * (dy * dz)
+Does not always yield one.
+x = INT_MAX; y = INT_MAX - 1; z = INT_MAX - 2;
+E. dx / dx = dz / dz
+Does not always yield one. The result of one of the sides of the equation could
+be NaN due to division by zero.
+x = 1; z = 0;
+
+2.89
+float fpwr2(int x) 
+{
+	/* Result exponent and fraction */
+	unsigned exp, frac;
+	unsigned u;
+	if (x < -149){
+		/* Too small. Return 0.0 */
+		exp = 0;
+		frac = 0;
+	} else if (x < -126) {
+		/* Denormalized result */
+		exp = 0;
+		frac = 1 << (149 + x);
+	} else if (x < 128) {
+		/* Normalized result. */
+		exp = x + 127;
+		frac = 0;
+	} else
+	{
+		/* Too big. Return +oo */
+		exp = 255;
+		frac = 0;
+	}
+	/* Pack exp and frac into 32 bits */
+	u = exp << 23 | frac;
+	/* Return as float */
+	return u2f(u);
+}

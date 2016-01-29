@@ -1,0 +1,13 @@
+3.64
+A.
+8(%ebp) is the address where the caller wants the result to be stored
+12(%ebp) is s1.a
+16(%ebp) is s1.p
+B.
+(%esp) is &s2
+4(%esp) is s1.a
+8(%esp) is s1.p
+12(%esp) is s2.sum
+16(%esp) is s2.diff
+C. Structures are passed directly on the stack
+D. Return the address of the structure, whose space was allocated on the stack by the function caller

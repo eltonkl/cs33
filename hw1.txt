@@ -1,0 +1,55 @@
+2.66
+int leftmost_one(unsigned x) {
+	/* Make sure that all bits to the right of the left-most 1 are 1 */
+	x |= x >> 1;
+	x |= x >> 2;
+	x |= x >> 4;
+	x |= x >> 8;
+	x |= x >> 16;
+	/* Zero all but the left-most bit */
+	return x ^ (x >> 1);
+}
+
+2.71
+a. If the byte to be extracted is negative, the code fails to extend the sign.
+b. int xbyte(packed_t word, int bytenum) 
+{ 
+	/* Shift so the first byte of x is the byte to be extracted */
+	int x = word << ((3 - bytenum) << 3);
+	/* Shift so that the byte is in the least significant spot
+	As x is signed, this shift is arithmetic, preserving sign */
+	return x >> 24;
+}
+
+2.72
+a. sizeof returns a size_t, which is an unsigned integer. During the 
+evaluation of maxbytes - sizeof(val), maxbytes is promoted to an unsigned 
+integer.
+The subtraction of two unsigned integers will always be greater than or equal 
+to zero, so the condition is always true.
+b. 	/* No subtraction involved, so no overflow problems */
+	if (maxbytes >= sizeof(val)) 
+
+2.81
+a. Let x = INT_MIN and assign to y any value but INT_MIN, then this expression
+yields 0.
+b. The left shift by 4 on (x+y) is equivalent to multiplying by 2^4, or 16, 
+even if the result is an overflow. This yields 16x + 16y + y - x on the LHS, 
+or 15x + 17y.
+The LHS is equivalent to the RHS, so this expression always yields 1.
+c. LHS is equivalent to ~x - y, which is equivalent to (-x - 1) - y. RHS is 
+equivalent to -(x+y) - 1. 
+These expressions are equivalent, even during overflow, so the expression 
+always yields 1.
+d. Negation acts the same on signed and unsigned integers, taking the two's 
+complement of the bit string. 
+As a result, the RHS can be treated as (unsigned)(x-y). Subtraction acts the 
+same on signed and unsigned integers, ux and uy hold the same respective bit 
+strings as x and y,
+and as (ux-uy) results in the same bit string as the RHS, this expression 
+always yields 1.
+e. The two shifts set the last two bits of the number to 0, which removes two 
+of the positive weighted bits of the number.
+This makes it less than its original value, if it had 1s in the last two 
+bits, or equivalent, if there were 0s in the last two bits.
+As a result, the expression always yields 1.

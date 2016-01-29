@@ -1,0 +1,211 @@
+First, I downloaded, extracted, and then used make to compile at default
+settings.
+
+Examining the makefile, it appears that there was a mistake in the way it was
+written for enabling compilation using a different source file in place of
+func.c. I changed two lines:
+
+SRC = func.c
+SRCS = $(SRC) main..c filter.c util.c
+
+And I am able to make and compile changes using alternative files for
+func.c.
+
+The first things I tried to do were useless. Simple things like code motion
+for func0, moving the 1/((double)(n)) from
+    weights[i] = 1/((double(n));
+which was inside a for loop outside of the for loop did nothing. The compiler
+probably already catches that stuff. So I should probably read the lab manual,
+which says to use gprof.
+
+$ gprof -b -Q omp
+Flat profile:
+
+Each sample counts as 0.01 seconds.
+  %   cumulative   self              self     total
+ time   seconds   seconds    calls  ms/call  ms/call  name
+ 67.78      0.44     0.44       15    29.37    30.89  func1
+ 18.48      0.56     0.12  5177344     0.00     0.00  rand2
+  4.62      0.59     0.03   491520     0.00     0.00  findIndexBin
+  3.08      0.61     0.02        2    10.01    10.01  init
+  3.08      0.63     0.02        1    20.02    20.02  imdilateDisk
+  1.54      0.64     0.01       15     0.67     0.67  func2
+  1.54      0.65     0.01        1    10.01   147.40  sequence
+  0.00      0.65     0.00   983042     0.00     0.00  round
+  0.00      0.65     0.00       16     0.00     0.00  dilateMatrix
+  0.00      0.65     0.00       15     0.00     0.00  func3
+  0.00      0.65     0.00       15     0.00     0.00  func4
+  0.00      0.65     0.00       15     0.00     2.00  func5
+  0.00      0.65     0.00       15     0.00     0.00  rand1
+  0.00      0.65     0.00        4     0.00     0.00  get_time
+  0.00      0.65     0.00        2     0.00     0.00  elapsed_time
+  0.00      0.65     0.00        1     0.00    97.33  addSeed
+  0.00      0.65     0.00        1     0.00     0.00  fillMatrix
+  0.00      0.65     0.00        1     0.00   503.40  filter
+  0.00      0.65     0.00        1     0.00     0.00  func0
+  0.00      0.65     0.00        1     0.00     0.00  getNeighbors
+
+func1 is the first thing to optimize according to the profiler.
+Examining the first for loop in func1 and the code for rand2,
+    for(i = 0; i < n; i++){
+        arrayX[i] += 1 + 5*rand2(seed, i);
+        arrayY[i] += -2 + 2*rand2(seed, i);
+    }
+this code can be parallelized.
+Additionally, breaking up the large for loop into two for loops, one with all of
+the code related to the index arays and the other related to probability, and 
+then parallelizing the second new for loop resulted in a significant speedup.
+The first new for loop did not benefit from parallelization and actually
+showed a massive slowdown.
+
+Before these two optimizations:
+FUNC TIME : 0.599779
+TOTAL TIME : 2.680552
+After:
+FUNC TIME : 0.305949
+TOTAL TIME : 2.482153
+
+gprof output for this executable:
+Flat profile:
+
+Each sample counts as 0.01 seconds.
+  %   cumulative   self              self     total
+ time   seconds   seconds    calls  ms/call  ms/call  name
+ 59.33      0.80     0.80                             frame_dummy
+ 22.25      1.10     0.30       15    20.02    20.02  func1
+  9.27      1.23     0.13  4249876     0.00     0.00  rand2
+  3.71      1.28     0.05   491520     0.00     0.00  findIndexBin
+  1.48      1.30     0.02        2    10.01    10.01  init
+  1.48      1.32     0.02        1    20.02    20.02  imdilateDisk
+  0.74      1.33     0.01       15     0.67     4.00  func5
+  0.74      1.34     0.01        1    10.01   133.52  addSeed
+  0.74      1.35     0.01        1    10.01   183.58  sequence
+  0.37      1.35     0.01       15     0.33     0.33  rand1
+  0.00      1.35     0.00   983042     0.00     0.00  round
+  0.00      1.35     0.00       16     0.00     0.00  dilateMatrix
+  0.00      1.35     0.00       15     0.00     0.00  func2
+  0.00      1.35     0.00       15     0.00     0.00  func3
+  0.00      1.35     0.00       15     0.00     0.00  func4
+  0.00      1.35     0.00        4     0.00     0.00  get_time
+  0.00      1.35     0.00        2     0.00     0.00  elapsed_time
+  0.00      1.35     0.00        1     0.00     0.00  fillMatrix
+  0.00      1.35     0.00        1     0.00   365.42  filter
+  0.00      1.35     0.00        1     0.00     0.00  func0
+  0.00      1.35     0.00        1     0.00     0.00  getNeighbors
+
+frame_dummy did not show up in the original profiling, indicating that
+something is being misreported by gprof.
+Have to do more detailed profiling using get_time and elapsed_time:
+The three for loop run times are:
+1: 0.000807
+2: 0.010721
+3: 0.003692
+
+The second for loop is bottlenecking func1. Need to optimize it somehow.
+
+Naively placing #pragma omp parallel for in front of loop and running make
+check indicates that the output of the program is incorrect in addition to
+making the program run extremely slower. 
+
+Examining the for loop in more detail, it appears that the variables index_X, 
+index_Y are being shared by all of the threads (this wasn't an issue in the
+other two loops because there were no other local variables that were shared
+besides the loop variable). Making the variables thread private fixes both the
+incorrect results and the needless usage of semaphores by OpenMP to prevent
+race conditions when sharing these variables which shouldn't be shared.
+
+Instead using
+#pragma omp parallel for private(index_X, index_Y, i, j)
+there is a massive speedup. Loop run times are now:
+1: 0.000807
+2: 0.001511
+3: 0.003578
+
+And now:
+Before:
+FUNC TIME : 0.305949
+TOTAL TIME : 2.482153
+After:
+FUNC TIME : 0.166242
+TOTAL TIME : 2.352633
+
+Using gprof:
+$ gprof -b -Q omp
+Flat profile:
+
+Each sample counts as 0.01 seconds.
+  %   cumulative   self              self     total
+ time   seconds   seconds    calls  ms/call  ms/call  name
+ 81.21      1.16     1.16                             frame_dummy
+ 11.90      1.33     0.17  4251964     0.00     0.00  rand2
+  2.80      1.37     0.04        1    40.05   207.93  addSeed
+  1.40      1.39     0.02        2    10.01    10.01  init
+  1.40      1.41     0.02        1    20.02    20.02  imdilateDisk
+  0.70      1.42     0.01        1    10.01   257.99  sequence
+  0.70      1.43     0.01                             main
+  0.00      1.43     0.00   491520     0.00     0.00  findIndexBin
+  0.00      1.43     0.00   104848     0.00     0.00  round
+  0.00      1.43     0.00       94     0.00     0.00  get_time
+  0.00      1.43     0.00       47     0.00     0.00  elapsed_time
+  0.00      1.43     0.00       16     0.00     0.00  dilateMatrix
+  0.00      1.43     0.00       15     0.00     0.00  func1
+  0.00      1.43     0.00       15     0.00     0.00  func2
+  0.00      1.43     0.00       15     0.00     0.00  func3
+  0.00      1.43     0.00       15     0.00     0.00  func4
+  0.00      1.43     0.00       15     0.00     0.00  func5
+  0.00      1.43     0.00       15     0.00     0.00  rand1
+  0.00      1.43     0.00        1     0.00     0.00  fillMatrix
+  0.00      1.43     0.00        1     0.00     0.00  filter
+  0.00      1.43     0.00        1     0.00     0.00  func0
+  0.00      1.43     0.00        1     0.00     0.00  getNeighbors
+
+Can't really tell what's going on anymore using gprof, but I presume there's
+more optimizations to be made in the other functions.
+The speedup for FUNC TIME is 3.6x (0.598906/0.163789) now.
+
+Using checkmem,
+
+mtrace filter mtrace.out || true
+
+Memory not freed:
+-----------------
+           Address     Size     Caller
+0x0000000001b3a0c0   0x10c0  at 0x37748042b9
+0x0000000001b3b190     0xc0  at 0x37748042b9
+0x0000000001b3b260     0x88  at 0x3774804269
+0x0000000001b3b2f0    0x120  at 0x3763c11953
+0x0000000001b3b420    0x120  at 0x3763c11953
+0x0000000001b3b550    0x120  at 0x3763c11953
+0x0000000001b3b680    0x120  at 0x3763c11953
+0x0000000001b3b7b0    0x120  at 0x3763c11953
+0x0000000001b3b8e0    0x120  at 0x3763c11953
+0x0000000001b3ba10    0x120  at 0x3763c11953
+0x0000000001b3bb40    0x120  at 0x3763c11953
+0x0000000001b3bc70    0x120  at 0x3763c11953
+0x0000000001b3bda0    0x120  at 0x3763c11953
+0x0000000001b3bed0    0x120  at 0x3763c11953
+0x0000000001b3c000    0x120  at 0x3763c11953
+0x0000000001b3c130    0x120  at 0x3763c11953
+0x0000000001b3c260    0x120  at 0x3763c11953
+0x0000000001b3c390    0x120  at 0x3763c11953
+
+Some googling and stuff takes me to
+https://gcc.gnu.org/bugzilla/show_bug.cgi?id=36298
+where the discussion of the bug report indicates that this unfreed memory
+isn't actually a memory leak.
+
+Inserting more
+#pragma omp parallel for private(i)
+into the first and third for loops of func2 results in more speedup.
+0.598706/0.133787 = 4.4x speedup.
+The second for loop is a sum of many doubles. Floating point addition is not
+associative, so loop unrolling or any other such attempt at optimizaiton will
+reduce the accuracy of the result, which we're not supposed to do.
+
+func5 shows similar opportunities for speedup:
+#pragma omp parallel for private(i, j) for the first loop
+and #pragma omp parallel for private(i) for the second loop
+0.598706/0.101374 = 5.9x speed up from all of these optimizations, combined.
+
+I tried to speed up func0 by running every copy loop in a separate thread but
+it didn't really change the performance of the program at all.
